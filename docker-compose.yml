@@ -1,0 +1,13 @@
+services:
+  uptime-kuma:
+    build:
+      context: .
+      args:
+        UPTIME_KUMA_VERSION: ${UPTIME_KUMA_VERSION:-2.0.2}
+    image: uptime-kuma-litestream:local
+    container_name: uptime-kuma
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    restart: unless-stopped

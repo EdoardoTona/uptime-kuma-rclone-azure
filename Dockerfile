@@ -3,7 +3,7 @@
 # =============================================================================
 
 # Build arguments with defaults
-ARG UPTIME_KUMA_VERSION=2.0.2
+ARG UPTIME_KUMA_VERSION=2.2.1
 
 # =============================================================================
 # Stage 1: Download and prepare rclone
@@ -20,7 +20,7 @@ RUN apk add --no-cache wget unzip && \
 # =============================================================================
 # Stage 2: Final image based on official Uptime-Kuma
 # =============================================================================
-FROM louislam/uptime-kuma:${UPTIME_KUMA_VERSION:-2.0.2}
+FROM louislam/uptime-kuma:${UPTIME_KUMA_VERSION:-2.2.1}
 
 ARG UPTIME_KUMA_VERSION
 

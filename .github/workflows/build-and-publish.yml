@@ -10,10 +10,6 @@ on:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      uptime_kuma_version:
-        description: "Uptime-Kuma version"
-        required: false
 
 env:
   REGISTRY: ghcr.io
@@ -56,8 +52,6 @@ jobs:
             type=semver,pattern={{major}}
             # Tag with 'latest' on main branch
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
-            # Tag with uptime-kuma version
-            type=raw,value=kuma-${{ env.UPTIME_KUMA_VERSION }}
             # Tag with branch name
             type=ref,event=branch
             # Tag with PR number
@@ -74,8 +68,6 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            UPTIME_KUMA_VERSION=${{ env.UPTIME_KUMA_VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -99,4 +91,4 @@ jobs:
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Versions:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Uptime-Kuma: ${{ env.UPTIME_KUMA_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Uptime-Kuma: see Dockerfile ARG UPTIME_KUMA_VERSION" >> $GITHUB_STEP_SUMMARY

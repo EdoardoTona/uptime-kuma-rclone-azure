@@ -2,8 +2,6 @@ services:
   uptime-kuma:
     build:
       context: .
-      args:
-        UPTIME_KUMA_VERSION: ${UPTIME_KUMA_VERSION:-2.0.2}
     image: uptime-kuma-litestream:local
     container_name: uptime-kuma
     ports:

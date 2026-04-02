@@ -14,12 +14,10 @@ on:
       uptime_kuma_version:
         description: "Uptime-Kuma version"
         required: false
-        default: "2.0.2"
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  UPTIME_KUMA_VERSION: ${{ github.event.inputs.uptime_kuma_version || '2.0.2' }}
 
 jobs:
   build-and-push:

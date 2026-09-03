@@ -269,40 +269,115 @@ start_upload_sync_loop() {
 }
 
 # =============================================================================
-# Start Uptime-Kuma with SQLite backup
+# Validate oauth2-proxy / Keycloak configuration
+# =============================================================================
+validate_external_auth_config() {
+    if [[ "${KUMA_EXTERNAL_AUTH:-true}" != "true" ]]; then
+        return 0
+    fi
+
+    local missing=0
+    local required_vars=(
+        OAUTH2_PROXY_OIDC_ISSUER_URL
+        OAUTH2_PROXY_CLIENT_ID
+        OAUTH2_PROXY_CLIENT_SECRET
+        OAUTH2_PROXY_COOKIE_SECRET
+        OAUTH2_PROXY_REDIRECT_URL
+    )
+
+    for var_name in "${required_vars[@]}"; do
+        if [[ -z "${!var_name:-}" ]]; then
+            log "FATAL: ${var_name} is required when KUMA_EXTERNAL_AUTH=true"
+            missing=1
+        fi
+    done
+
+    if [[ "${missing}" -ne 0 ]]; then
+        log "Example issuer: https://keycloak.example/realms/my-realm"
+        log "Recommended redirect URL: https://<public-host>/oauth2/callback"
+        exit 1
+    fi
+}
+
+# =============================================================================
+# Process management
+# =============================================================================
+KUMA_PID=""
+OAUTH2_PROXY_PID=""
+
+terminate_services() {
+    trap - TERM INT
+
+    if [[ -n "${OAUTH2_PROXY_PID}" ]] && kill -0 "${OAUTH2_PROXY_PID}" 2>/dev/null; then
+        kill -TERM "${OAUTH2_PROXY_PID}" 2>/dev/null || true
+    fi
+
+    if [[ -n "${KUMA_PID}" ]] && kill -0 "${KUMA_PID}" 2>/dev/null; then
+        kill -TERM "${KUMA_PID}" 2>/dev/null || true
+    fi
+}
+
+trap terminate_services TERM INT
+
+# =============================================================================
+# Start Uptime-Kuma with SQLite backup and optional Keycloak/OIDC protection
 # =============================================================================
 start_kuma() {
     log "Starting Uptime-Kuma with SQLite backup..."
 
-    # Ensure data directory exists
     mkdir -p "${DATA_DIR}"
     mkdir -p "${UPLOAD_DIR}"
 
-    # Restore database if configured
     restore_database
-
-    # Restore uploads from Azure
     restore_uploads
-
-    # Ensure db-config.json exists (required by Uptime-Kuma on first start)
     ensure_db_config
 
-    # Run initial backup if database exists (to ensure remote is in sync)
     if is_backup_configured && [[ -f "${DB_PATH}" ]]; then
         log "Running initial database backup..."
         backup_database || log "WARNING: Initial backup failed, will retry in next cycle"
     fi
 
-    # Start background database backup loop
     start_database_backup_loop
-
-    # Start background upload sync loop
     start_upload_sync_loop
 
-    log "Starting Uptime-Kuma..."
+    if [[ "${KUMA_EXTERNAL_AUTH:-true}" != "true" ]]; then
+        log "External authentication disabled; exposing Uptime-Kuma directly on :3001"
+        export UPTIME_KUMA_HOST="${UPTIME_KUMA_DIRECT_HOST:-0.0.0.0}"
+        export UPTIME_KUMA_PORT="${UPTIME_KUMA_DIRECT_PORT:-3001}"
+        exec node /app/server/server.js
+    fi
 
-    # Start Uptime-Kuma
-    exec node /app/server/server.js
+    validate_external_auth_config
+
+    # Security boundary: Kuma must not be reachable directly from outside the container.
+    export UPTIME_KUMA_HOST="${KUMA_INTERNAL_HOST:-127.0.0.1}"
+    export UPTIME_KUMA_PORT="${KUMA_INTERNAL_PORT:-3002}"
+
+    log "Starting internal Uptime-Kuma on ${UPTIME_KUMA_HOST}:${UPTIME_KUMA_PORT}"
+    node /app/server/server.js &
+    KUMA_PID=$!
+
+    log "Starting oauth2-proxy on :3001 with provider ${OAUTH2_PROXY_PROVIDER:-keycloak-oidc}"
+    /usr/local/bin/oauth2-proxy &
+    OAUTH2_PROXY_PID=$!
+
+    # Exit the container if either critical process exits.
+    set +e
+    wait -n "${KUMA_PID}" "${OAUTH2_PROXY_PID}"
+    local status=$?
+    set -e
+
+    if ! kill -0 "${KUMA_PID}" 2>/dev/null; then
+        log "ERROR: Uptime-Kuma exited"
+    fi
+    if ! kill -0 "${OAUTH2_PROXY_PID}" 2>/dev/null; then
+        log "ERROR: oauth2-proxy exited"
+    fi
+
+    terminate_services
+    wait "${KUMA_PID}" 2>/dev/null || true
+    wait "${OAUTH2_PROXY_PID}" 2>/dev/null || true
+    exit "${status}"
 }
 
 # =============================================================================
@@ -310,11 +385,12 @@ start_kuma() {
 # =============================================================================
 main() {
     log "============================================="
-    log "Uptime-Kuma with SQLite Backup"
+    log "Uptime-Kuma with SQLite Backup + Keycloak/OIDC"
     log "============================================="
     log "Uptime-Kuma version: ${UPTIME_KUMA_VERSION:-unknown}"
     log "Data directory: ${DATA_DIR}"
     log "Database path: ${DB_PATH}"
+    log "External authentication: ${KUMA_EXTERNAL_AUTH:-true}"
     log "============================================="
 
     if is_backup_configured; then
@@ -340,5 +416,4 @@ main() {
     start_kuma
 }
 
-# Run main function
 main "$@"

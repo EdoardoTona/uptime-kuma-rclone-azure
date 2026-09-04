@@ -90,7 +90,7 @@ ENV KUMA_EXTERNAL_AUTH=true \
     OAUTH2_PROXY_COOKIE_HTTPONLY=true \
     OAUTH2_PROXY_COOKIE_SAMESITE=lax \
     OAUTH2_PROXY_COOKIE_NAME=__Host-uptime_kuma \
-    OAUTH2_PROXY_SKIP_AUTH_ROUTES="GET=^/$,GET=^/status(/.*)?$,GET=^/status-page$,GET=^/api/status-page(/.*)?$,GET=^/api/entry-page$,GET=^/assets(/.*)?$,GET=^/upload(/.*)?$,GET=^/(icon\\.svg|apple-touch-icon\\.png|manifest\\.json|favicon\\.ico|robots\\.txt)$"
+    OAUTH2_PROXY_SKIP_AUTH_ROUTES="GET=^/$,GET=^/status(/.*)?$,GET=^/status-page$,GET=^/api/status-page(/.*)?$,GET=^/api/entry-page$,GET=^/api/push(/.*)?$,GET=^/assets(/.*)?$,GET=^/upload(/.*)?$,GET=^/(icon\\.svg|apple-touch-icon\\.png|manifest\\.json|favicon\\.ico|robots\\.txt)$"
 
 USER root
 

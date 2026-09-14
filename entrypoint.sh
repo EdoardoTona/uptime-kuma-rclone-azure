@@ -14,6 +14,22 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
+# Convert a duration like 30s / 5m / 1h to seconds, falling back to $2.
+to_seconds() {
+    local value="$1"
+    local fallback="$2"
+
+    if [[ "${value}" =~ ^([0-9]+)s$ ]]; then
+        echo "${BASH_REMATCH[1]}"
+    elif [[ "${value}" =~ ^([0-9]+)m$ ]]; then
+        echo $(( ${BASH_REMATCH[1]} * 60 ))
+    elif [[ "${value}" =~ ^([0-9]+)h$ ]]; then
+        echo $(( ${BASH_REMATCH[1]} * 3600 ))
+    else
+        echo "${fallback}"
+    fi
+}
+
 # =============================================================================
 # Ensure db-config.json exists (required by Uptime-Kuma)
 # =============================================================================
@@ -129,6 +145,8 @@ restore_database() {
 # =============================================================================
 # Backup database to Azure Blob Storage using sqlite.backup
 # =============================================================================
+BACKUP_LOCK_DIR="/tmp/kuma-backup.lock"
+
 backup_database() {
     if ! is_backup_configured; then
         return 0
@@ -138,6 +156,26 @@ backup_database() {
         return 0
     fi
 
+    # The periodic loop and the configuration-change watcher are independent
+    # background jobs and can fire at the same moment. Two concurrent runs would
+    # write the same temporary file and upload a torn copy, so only one wins.
+    #
+    # Skipping is reported as a failure on purpose: the caller must not conclude
+    # that its data reached Azure. The snapshot taken by the run already in
+    # flight may predate the change that triggered this call, so the watcher has
+    # to keep its old fingerprint and try again.
+    if ! mkdir "${BACKUP_LOCK_DIR}" 2>/dev/null; then
+        log "A database backup is already running, skipping this one"
+        return 1
+    fi
+
+    local status=0
+    backup_database_locked || status=$?
+    rmdir "${BACKUP_LOCK_DIR}" 2>/dev/null || true
+    return "${status}"
+}
+
+backup_database_locked() {
     setup_rclone
 
     local container="${AZURE_BACKUP_CONTAINER:-kuma-backup}"
@@ -216,24 +254,17 @@ start_database_backup_loop() {
     fi
 
     local interval="${DB_BACKUP_INTERVAL:-5m}"
-    # Convert interval to seconds
     local seconds
-    if [[ "${interval}" =~ ^([0-9]+)s$ ]]; then
-        seconds="${BASH_REMATCH[1]}"
-    elif [[ "${interval}" =~ ^([0-9]+)m$ ]]; then
-        seconds=$((${BASH_REMATCH[1]} * 60))
-    elif [[ "${interval}" =~ ^([0-9]+)h$ ]]; then
-        seconds=$((${BASH_REMATCH[1]} * 3600))
-    else
-        seconds=300  # default 5 minutes
-    fi
+    seconds=$(to_seconds "${interval}" 300)
 
     log "Starting database backup loop (interval: ${interval} = ${seconds}s)"
 
     while true; do
         sleep "${seconds}"
         log "Running database backup..."
-        backup_database
+        # Without the guard, set -e would kill this loop on the first failed
+        # upload and silently stop backing up for the life of the container.
+        backup_database || log "WARNING: Scheduled backup did not complete, will retry next cycle"
     done &
 }
 
@@ -247,17 +278,8 @@ start_upload_sync_loop() {
     fi
 
     local interval="${UPLOAD_SYNC_INTERVAL:-5m}"
-    # Convert interval to seconds
     local seconds
-    if [[ "${interval}" =~ ^([0-9]+)s$ ]]; then
-        seconds="${BASH_REMATCH[1]}"
-    elif [[ "${interval}" =~ ^([0-9]+)m$ ]]; then
-        seconds=$((${BASH_REMATCH[1]} * 60))
-    elif [[ "${interval}" =~ ^([0-9]+)h$ ]]; then
-        seconds=$((${BASH_REMATCH[1]} * 3600))
-    else
-        seconds=300  # default 5 minutes
-    fi
+    seconds=$(to_seconds "${interval}" 300)
 
     log "Starting upload sync loop (interval: ${interval} = ${seconds}s)"
 
@@ -266,6 +288,113 @@ start_upload_sync_loop() {
         log "Syncing uploads to Azure..."
         sync_uploads_to_azure
     done &
+}
+
+# =============================================================================
+# Fingerprint of the configuration the user edits from the UI
+# =============================================================================
+# Watching the database file's mtime would be useless: Uptime-Kuma writes
+# heartbeats and stats continuously, so the file is always "just modified".
+# Dumping only the configuration tables isolates what an operator actually
+# changes (monitors, notifications, status pages, maintenance, settings) from
+# that background write traffic. The tables are tiny, so this stays cheap even
+# when polled every 30 seconds.
+config_fingerprint() {
+    # Never touch a missing database: sqlite3 would create an empty file and the
+    # next restart would then skip the restore from Azure.
+    [[ -f "${DB_PATH}" ]] || return 0
+
+    # The dump is captured first and its exit status checked before hashing:
+    # piping straight into md5sum would hash a truncated dump just as happily as
+    # a complete one and hide sqlite3's failure, producing a fingerprint that
+    # looks like a configuration change.
+    local dump
+    if ! dump=$(sqlite3 "${DB_PATH}" \
+        ".dump monitor" \
+        ".dump monitor_tag" \
+        ".dump tag" \
+        ".dump monitor_group" \
+        ".dump group" \
+        ".dump notification" \
+        ".dump monitor_notification" \
+        ".dump status_page" \
+        ".dump status_page_cname" \
+        ".dump incident" \
+        ".dump maintenance" \
+        ".dump monitor_maintenance" \
+        ".dump maintenance_status_page" \
+        ".dump proxy" \
+        ".dump docker_host" \
+        ".dump remote_browser" \
+        ".dump api_key" \
+        ".dump user" \
+        ".dump setting" \
+        2>/dev/null); then
+        return 0
+    fi
+
+    printf '%s' "${dump}" | md5sum | cut -d' ' -f1
+}
+
+# =============================================================================
+# Background backup triggered by configuration changes
+# =============================================================================
+# The periodic loop alone forces a trade-off: a long DB_BACKUP_INTERVAL (1h in
+# production) keeps the upload volume low but can lose an hour of work, while a
+# short one uploads the whole database all night for nothing. This watcher gets
+# both: the periodic loop keeps covering heartbeat history, and an edit made
+# from the UI reaches Azure within one check interval.
+start_config_change_backup_loop() {
+    if ! is_backup_configured; then
+        return 0
+    fi
+
+    if [[ "${DB_CONFIG_WATCH_ENABLED:-true}" != "true" ]]; then
+        log "Configuration-change backup watcher disabled"
+        return 0
+    fi
+
+    local check_seconds
+    local min_seconds
+    check_seconds=$(to_seconds "${DB_CONFIG_WATCH_INTERVAL:-30s}" 30)
+    min_seconds=$(to_seconds "${DB_CONFIG_WATCH_MIN_INTERVAL:-60s}" 60)
+
+    log "Starting configuration-change backup watcher (check every ${check_seconds}s, min ${min_seconds}s between backups)"
+
+    (
+        last_fingerprint=$(config_fingerprint)
+        last_backup=0
+
+        while true; do
+            sleep "${check_seconds}"
+
+            current=$(config_fingerprint)
+
+            # An empty fingerprint means the database could not be read at all
+            # (missing file, or sqlite3 failed); treat it as "no information",
+            # not as a change.
+            if [[ -z "${current}" || "${current}" == "${last_fingerprint}" ]]; then
+                continue
+            fi
+
+            now=$(date +%s)
+
+            # Debounce: while someone edits several monitors in a row, back up at
+            # most once per min_seconds. The fingerprint is deliberately left
+            # untouched so the pending change is picked up on a later tick.
+            if (( now - last_backup < min_seconds )); then
+                continue
+            fi
+
+            log "Configuration change detected, running database backup..."
+            if backup_database; then
+                last_fingerprint="${current}"
+                last_backup="${now}"
+            else
+                log "WARNING: Configuration-change backup did not complete, will retry"
+            fi
+        done
+    ) &
 }
 
 # =============================================================================
@@ -332,12 +461,17 @@ start_kuma() {
     restore_uploads
     ensure_db_config
 
+    # A container killed mid-backup leaves the lock behind in its writable layer,
+    # which would block every backup after a plain `docker restart`.
+    rmdir "${BACKUP_LOCK_DIR}" 2>/dev/null || true
+
     if is_backup_configured && [[ -f "${DB_PATH}" ]]; then
         log "Running initial database backup..."
         backup_database || log "WARNING: Initial backup failed, will retry in next cycle"
     fi
 
     start_database_backup_loop
+    start_config_change_backup_loop
     start_upload_sync_loop
 
     if [[ "${KUMA_EXTERNAL_AUTH:-true}" != "true" ]]; then
@@ -398,6 +532,11 @@ main() {
         log "Azure Storage Account: ${AZURE_STORAGE_ACCOUNT}"
         log "Azure Container: ${AZURE_BACKUP_CONTAINER:-kuma-backup}"
         log "Backup Interval: ${DB_BACKUP_INTERVAL:-5m}"
+        if [[ "${DB_CONFIG_WATCH_ENABLED:-true}" == "true" ]]; then
+            log "Config-change backup: every ${DB_CONFIG_WATCH_INTERVAL:-30s}, min gap ${DB_CONFIG_WATCH_MIN_INTERVAL:-60s}"
+        else
+            log "Config-change backup: disabled"
+        fi
     else
         log "Database backup is disabled or not configured"
     fi

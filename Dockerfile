@@ -55,6 +55,16 @@ ENV DB_BACKUP_ENABLED=true \
     AZURE_BACKUP_CONTAINER=kuma-backup \
     AZURE_BACKUP_FILENAME=kuma.db
 
+# Extra backup triggered by configuration changes, on top of DB_BACKUP_INTERVAL.
+# The entrypoint fingerprints the config tables (monitors, notifications, status
+# pages, maintenance, settings) and backs up as soon as they change, so an edit
+# made from the UI is not exposed to a whole DB_BACKUP_INTERVAL of data loss.
+# Heartbeat traffic does not move the fingerprint, so an idle instance still
+# uploads only on the periodic schedule.
+ENV DB_CONFIG_WATCH_ENABLED=true \
+    DB_CONFIG_WATCH_INTERVAL=30s \
+    DB_CONFIG_WATCH_MIN_INTERVAL=60s
+
 # Upload sync configuration
 ENV UPLOAD_SYNC_ENABLED=true \
     UPLOAD_SYNC_INTERVAL=5m \
@@ -106,6 +116,35 @@ COPY --from=oauth2proxy /bin/oauth2-proxy /usr/local/bin/oauth2-proxy
 # trust forwarded headers without persisting those changes in kuma.db.
 # Build fails deliberately if the expected 2.5.3 source marker changes.
 RUN node -e 'const fs=require("fs"); const f="/app/server/settings.js"; let s=fs.readFileSync(f,"utf8"); const m="    static async get(key) {\n"; const r="    static async get(key) {\n        // Image-level external authentication override.\n        // oauth2-proxy is the security boundary; never expose Kuma internal port.\n        if (process.env.KUMA_EXTERNAL_AUTH === \"true\") {\n            if (key === \"disableAuth\" || key === \"trustProxy\") {\n                return true;\n            }\n        }\n"; if (!s.includes(m)) throw new Error("Unable to patch /app/server/settings.js: expected marker not found"); fs.writeFileSync(f,s.replace(m,r));'
+
+# Patch UptimeCalculator so a failed stat INSERT cannot poison the process.
+#
+# Problem (upstream, present in 2.5.x): getDailyStatBean/getHourlyStatBean/
+# getMinutelyStatBean cache the last bean and short-circuit on the timestamp
+# alone, without re-reading the DB. R.store() assigns the row id to that very
+# object, so when an INSERT fails the cached bean keeps id = 0 and every later
+# update() of the same bucket retries the same doomed INSERT until the process
+# restarts. Since the whole /api/push handler is wrapped in a try/catch that
+# answers 404, one failed INSERT turns every subsequent push into a 404 and the
+# monitor goes down for good.
+#
+# How the INSERT fails in the first place: update() is called both by the
+# monitor beat loop and by the /api/push HTTP handler. For a push monitor these
+# two run concurrently, so at a bucket rollover both can miss the row, both
+# dispense a new bean, and the second store() hits
+# "UNIQUE constraint failed: stat_daily.monitor_id, stat_daily.timestamp".
+# Any other transient write failure (e.g. SQLITE_BUSY) has the same effect.
+#
+# The fix: only trust the cached bean once it has actually been persisted
+# (id != 0). After a failed INSERT the next update() re-reads the row, finds the
+# one already written by the concurrent writer, and UPDATEs it instead — the
+# calculator heals itself. In the normal path store() sets the id on the cached
+# object right away, so this costs no extra query. It does not remove the race
+# itself: one heartbeat can still be lost per collision, it just stops being
+# permanent.
+#
+# Build fails deliberately if the expected 2.5.3 source marker changes.
+RUN node -e 'const fs=require("fs"); const f="/app/server/uptime-calculator.js"; let s=fs.readFileSync(f,"utf8"); for (const k of ["lastDailyStatBean","lastHourlyStatBean","lastMinutelyStatBean"]) { const m=`if (this.${k} && this.${k}.timestamp === timestamp) {`; const r=`if (this.${k} && this.${k}.id && this.${k}.timestamp === timestamp) {`; if (!s.includes(m)) throw new Error("Unable to patch /app/server/uptime-calculator.js: expected marker not found for " + k); s=s.split(m).join(r); } fs.writeFileSync(f,s);'
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && mkdir -p ${DATA_DIR}

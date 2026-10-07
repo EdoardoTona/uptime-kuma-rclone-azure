@@ -3,8 +3,8 @@
 # SQLite backup to Azure Blob Storage via rclone
 # =============================================================================
 
-ARG UPTIME_KUMA_VERSION=2.5.4
-ARG OAUTH2_PROXY_VERSION=7.15.4
+ARG UPTIME_KUMA_VERSION=2.5.5
+ARG OAUTH2_PROXY_VERSION=7.15.5
 
 # =============================================================================
 # Stage 1: Download and prepare rclone
@@ -35,7 +35,7 @@ ARG OAUTH2_PROXY_VERSION
 LABEL org.opencontainers.image.title="Uptime-Kuma with Keycloak and SQLite Backup"
 LABEL org.opencontainers.image.description="Uptime-Kuma protected by Keycloak/OIDC via oauth2-proxy, with SQLite backup to Azure Blob Storage via rclone"
 LABEL org.opencontainers.image.version="${UPTIME_KUMA_VERSION}"
-LABEL org.opencontainers.image.source="https://github.com/YOUR_USERNAME/uptime-kuma-litestream"
+LABEL org.opencontainers.image.source="https://github.com/EdoardoTona/uptime-kuma-rclone-azure"
 
 # =============================================================================
 # Uptime-Kuma / data

@@ -18,7 +18,7 @@ version: "3.8"
 
 services:
   uptime-kuma:
-    image: ghcr.io/EdoardoTona/uptime-kuma-litestream:latest
+    image: ghcr.io/edoardotona/uptime-kuma-rclone-azure:latest
     container_name: uptime-kuma
     ports:
       - "3001:3001"
@@ -95,12 +95,13 @@ volumes:
 
 ```bash
 # Build with default versions
-docker build -t uptime-kuma-litestream .
+docker build -t uptime-kuma-rclone-azure .
 
-# Build with specific version
+# Build with specific versions
 docker build \
-  --build-arg UPTIME_KUMA_VERSION=2.0.2 \
-  -t uptime-kuma-litestream .
+  --build-arg UPTIME_KUMA_VERSION=<version> \
+  --build-arg OAUTH2_PROXY_VERSION=<version> \
+  -t uptime-kuma-rclone-azure .
 ```
 
 ## GitHub Container Registry
@@ -114,12 +115,11 @@ This image is automatically built and published to GitHub Container Registry on:
 ### Pull the image
 
 ```bash
-docker pull ghcr.io/EdoardoTona/uptime-kuma-litestream:latest
+docker pull ghcr.io/edoardotona/uptime-kuma-rclone-azure:latest
 ```
 
 ### Available Tags
 
 - `latest` - Latest build from main branch
-- `kuma-2.0.2` - Tagged with Uptime-Kuma version
-- `v1.0.0` - Semantic version tags
+- `1.0.0`, `1.0`, `1` - Semantic version tags (from `v1.0.0` git tags)
 - `sha-xxxxxx` - Git commit SHA

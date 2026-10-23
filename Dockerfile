@@ -3,16 +3,16 @@
 # SQLite backup to Azure Blob Storage via rclone
 # =============================================================================
 
-ARG UPTIME_KUMA_VERSION=2.5.5
+ARG UPTIME_KUMA_VERSION=2.5.7
 ARG OAUTH2_PROXY_VERSION=7.15.5
 
 # =============================================================================
 # Stage 1: Download and prepare rclone
 # =============================================================================
-FROM alpine:3.19 AS tools
+FROM alpine:3.24 AS tools
 
 RUN apk add --no-cache wget unzip && \
-    wget -q "https://downloads.rclone.org/rclone-current-linux-amd64.zip" -O /tmp/rclone.zip && \
+    wget -q "https://downloads.rclone.org/v1.75.2/rclone-v1.75.2-linux-amd64.zip" -O /tmp/rclone.zip && \
     unzip -q /tmp/rclone.zip -d /tmp && \
     mv /tmp/rclone-*/rclone /usr/local/bin/rclone && \
     chmod +x /usr/local/bin/rclone

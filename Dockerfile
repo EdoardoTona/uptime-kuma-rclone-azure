@@ -3,7 +3,7 @@
 # SQLite backup to Azure Blob Storage via rclone
 # =============================================================================
 
-ARG UPTIME_KUMA_VERSION=2.5.7
+ARG UPTIME_KUMA_VERSION=2.5.8
 ARG OAUTH2_PROXY_VERSION=7.15.5
 
 # =============================================================================

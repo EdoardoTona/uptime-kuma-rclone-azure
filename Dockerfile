@@ -55,7 +55,7 @@ ENV AZURE_STORAGE_ACCOUNT="" \
 # Database backup configuration
 ENV DB_BACKUP_ENABLED=true \
     DB_BACKUP_INTERVAL=5m \
-    DB_FAIL_ON_RESTORE_ERROR=false \
+    DB_FAIL_ON_RESTORE_ERROR=true \
     AZURE_BACKUP_CONTAINER=kuma-backup \
     AZURE_BACKUP_FILENAME=kuma.db
 
@@ -104,7 +104,7 @@ ENV KUMA_EXTERNAL_AUTH=true \
     OAUTH2_PROXY_COOKIE_HTTPONLY=true \
     OAUTH2_PROXY_COOKIE_SAMESITE=lax \
     OAUTH2_PROXY_COOKIE_NAME=__Host-uptime_kuma \
-    OAUTH2_PROXY_SKIP_AUTH_ROUTES="GET=^/$,GET=^/status(/.*)?$,GET=^/status-page$,GET=^/api/status-page(/.*)?$,GET=^/api/entry-page$,GET=^/api/push(/.*)?$,GET=^/assets(/.*)?$,GET=^/upload(/.*)?$,GET=^/(icon\\.svg|apple-touch-icon\\.png|manifest\\.json|favicon\\.ico|robots\\.txt)$"
+    OAUTH2_PROXY_SKIP_AUTH_ROUTES="GET=^/$,GET=^/status(/.*)?$,GET=^/status-page$,GET=^/api/status-page(/.*)?$,GET=^/api/entry-page$,GET=^/api/push(/.*)?$,GET=^/metrics$,GET=^/assets(/.*)?$,GET=^/upload(/.*)?$,GET=^/(icon\\.svg|apple-touch-icon\\.png|manifest\\.json|favicon\\.ico|robots\\.txt)$"
 
 USER root
 
@@ -149,6 +149,16 @@ RUN node -e 'const fs=require("fs"); const f="/app/server/settings.js"; let s=fs
 #
 # Build fails deliberately if the expected 2.5.3 source marker changes.
 RUN node -e 'const fs=require("fs"); const f="/app/server/uptime-calculator.js"; let s=fs.readFileSync(f,"utf8"); for (const k of ["lastDailyStatBean","lastHourlyStatBean","lastMinutelyStatBean"]) { const m=`if (this.${k} && this.${k}.timestamp === timestamp) {`; const r=`if (this.${k} && this.${k}.id && this.${k}.timestamp === timestamp) {`; if (!s.includes(m)) throw new Error("Unable to patch /app/server/uptime-calculator.js: expected marker not found for " + k); s=s.split(m).join(r); } fs.writeFileSync(f,s);'
+
+# Patch apiAuth (only used by GET /metrics) so it always verifies a Kuma API key
+# in external-auth mode. Upstream skips every check when disableAuth is true,
+# which the settings patch above forces; oauth2-proxy lets /metrics through
+# unauthenticated (see OAUTH2_PROXY_SKIP_AUTH_ROUTES), so Kuma must check the
+# key itself: Basic auth, any username, password = full key "uk<id>_<secret>",
+# verified against the bcrypt hash in api_key (active and not expired).
+#
+# Build fails deliberately if the expected source marker changes.
+RUN node -e 'const fs=require("fs"); const f="/app/server/auth.js"; let s=fs.readFileSync(f,"utf8"); const m="exports.apiAuth = async function (req, res, next) {\n"; const r=m+"    // Image-level external authentication: /metrics bypasses oauth2-proxy, so always require an API key.\n    if (process.env.KUMA_EXTERNAL_AUTH === \"true\") {\n        return basicAuth({ authorizer: apiAuthorizer, authorizeAsync: true, challenge: true })(req, res, next);\n    }\n"; if (!s.includes(m)) throw new Error("Unable to patch /app/server/auth.js: expected marker not found"); fs.writeFileSync(f,s.replace(m,r));'
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && mkdir -p ${DATA_DIR}

@@ -29,7 +29,7 @@ services:
       # Database backup settings
       - DB_BACKUP_ENABLED=true
       - DB_BACKUP_INTERVAL=5m
-      - DB_FAIL_ON_RESTORE_ERROR=false
+      - DB_FAIL_ON_RESTORE_ERROR=true
       - AZURE_BACKUP_CONTAINER=kuma-backup
       # Upload sync settings
       - UPLOAD_SYNC_ENABLED=true
@@ -59,7 +59,7 @@ volumes:
 | -------------------------- | ------------- | ------------------------------------------------------ |
 | `DB_BACKUP_ENABLED`        | `true`        | Enable/disable database backup                         |
 | `DB_BACKUP_INTERVAL`       | `5m`          | How often to backup (e.g., 5m, 1h, 30s)                |
-| `DB_FAIL_ON_RESTORE_ERROR` | `false`       | Exit if restore fails (prevents overwriting remote DB) |
+| `DB_FAIL_ON_RESTORE_ERROR` | `true`        | Exit if restore fails (prevents overwriting remote DB); set `false` for the very first start, when no backup exists yet |
 | `AZURE_BACKUP_CONTAINER`   | `kuma-backup` | Azure Blob container for database backup               |
 | `AZURE_BACKUP_FILENAME`    | `kuma.db`     | Filename for the backup in Azure                       |
 
